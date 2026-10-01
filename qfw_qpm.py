@@ -13,14 +13,42 @@ SERVICE_ID = "backline-local"
 
 
 def reservation_from_env(service_id=SERVICE_ID):
-    """This service's reservation ID from QFW_RESERVATIONS, or None."""
-    entries = json.loads(os.environ.get("QFW_RESERVATIONS") or "[]")
-    return next((str(rid) for sid, rid in entries if sid == service_id), None)
+    """(service_id, reservation_id) for this QPM from QFW_RESERVATIONS, or None.
+
+    The entry naming service_id (bare, or as qpm:<provider>:<name>); else the only entry, as
+    QFw's select_qpm_reservation does when a single QPM is reserved.
+    """
+    entries = [(str(sid), str(rid))
+               for sid, rid in json.loads(os.environ.get("QFW_RESERVATIONS") or "[]")]
+    named = [e for e in entries if e[0] == service_id or e[0].endswith(":" + service_id)]
+    if named:
+        return named[0]
+    return entries[0] if len(entries) == 1 else None
+
+
+def _qpm_resolver():
+    # qfw_qiskit/__init__.py imports Qiskit; the resolver does not. Load the package without
+    # its __init__ when Qiskit is absent, as QFw's own mock test conftest does.
+    try:
+        from qfw_qiskit.qpm_resolver import QPMResolver
+    except ModuleNotFoundError as e:
+        if e.name is None or not e.name.startswith("qiskit"):
+            raise
+        import importlib.util
+        import sys
+        import types
+        spec = importlib.util.find_spec("qfw_qiskit")
+        package = types.ModuleType("qfw_qiskit")
+        package.__path__ = list(spec.submodule_search_locations)
+        sys.modules["qfw_qiskit"] = package
+        from qfw_qiskit.qpm_resolver import QPMResolver
+    return QPMResolver
 
 
 class QFwBacklineQPM:
-    def __init__(self, admission, properties, reservation_id=None):
+    def __init__(self, admission, properties, reservation_id=None, service_id=SERVICE_ID):
         self._admission = admission
+        self.service_id = service_id
         self.properties = dict(properties)
         self.reservation_id = reservation_id
 
@@ -29,20 +57,21 @@ class QFwBacklineQPM:
         # Needs an activated QFw environment (qfw-activate) and a running directory service.
         import defw
         from defw_app_util import defw_get_directory_service
-        from qfw_qiskit.qpm_resolver import QPMResolver
+        QPMResolver = _qpm_resolver()
 
         resolver = QPMResolver.from_environment(
             dirsvc=defw_get_directory_service(timeout=timeout), defw_module=defw)
-        rid = reservation_from_env()
-        if rid is not None:
+        reserved = reservation_from_env()
+        if reserved is not None:
+            sid, rid = reserved
             bound = resolver.connect_reserved_managed(
-                SERVICE_ID, rid, timeout=timeout, api_category="admission")
-            return cls(bound.client, bound.resolved.properties or {}, rid)
+                sid, rid, timeout=timeout, api_category="admission")
+            return cls(bound.client, bound.resolved.properties or {}, rid, sid)
         resolved = resolver.resolve(timeout=timeout, api_category="admission",
                                     provider="backline")
         client = resolver.managed_binding(resolved).api(
             resolved.api_binding.binding_name, expected_runtime_id=resolved.runtime_id)
-        return cls(client, resolved.properties or {})
+        return cls(client, resolved.properties or {}, service_id=resolved.service_id)
 
     def query(self, token=None):
         return dict(self.properties)

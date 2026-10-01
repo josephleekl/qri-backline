@@ -26,12 +26,18 @@ def main():
     admission = MockBacklineQPM.from_inventory(tmp / "inventory.toml")
 
     # QFW_RESERVATIONS parsing: absent, ours, someone else's only
+    # (the gateway writes the service name; the directory may use qpm:<provider>:<name>)
     os.environ.pop("QFW_RESERVATIONS", None)
     assert reservation_from_env() is None
     os.environ["QFW_RESERVATIONS"] = '[["backline-local","7"],["fake-iqm","8"]]'
-    assert reservation_from_env() == "7"
-    os.environ["QFW_RESERVATIONS"] = '[["fake-iqm","8"]]'
+    assert reservation_from_env() == ("backline-local", "7")
+    os.environ["QFW_RESERVATIONS"] = '[["fake-iqm","8"],["qpm:backline:backline-local","9"]]'
+    assert reservation_from_env() == ("qpm:backline:backline-local", "9")
+    os.environ["QFW_RESERVATIONS"] = '[["backline-site-a","5"]]'
+    assert reservation_from_env() == ("backline-site-a", "5")      # single entry, as QFw selects
+    os.environ["QFW_RESERVATIONS"] = '[["fake-iqm","8"],["nwqsim","3"]]'
     assert reservation_from_env() is None
+    os.environ.pop("QFW_RESERVATIONS")
 
     # direct: the client reserves, so it owns the release
     qpm = QFwBacklineQPM(admission, properties={"qec_codes": ["steane"]})

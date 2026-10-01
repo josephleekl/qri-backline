@@ -10,8 +10,10 @@ or device name appears in this file.
     ./demo_qri_1_local_memcpy.py --qfw    QFw's svc_backline_qpm; under `salloc --qpu=backline-local`
                                           the reservation comes from QFW_RESERVATIONS
 """
+import getpass
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pennylane as qp
@@ -30,7 +32,15 @@ INTENT = {
 
 
 def make_request(intent):
+    # owner / job_id / scope_id / target_device_id / walltime_ns are what the qfw-slurm gateway
+    # sends; QFw's admission (qhw-admission) needs them. The mock ignores them.
+    job = f"qri-demo-{uuid.uuid4().hex[:8]}"
     return {
+        "owner": {"user": getpass.getuser()},
+        "job_id": job,
+        "scope_id": job,
+        "target_device_id": "backline-local",
+        "walltime_ns": 60_000_000_000,
         "workload_kind": "quantum",
         "task_class": {"count": 1, "qubit_count": 3, "depth": 3, "shots": 10},
         "ttl_ns": 60_000_000_000,
