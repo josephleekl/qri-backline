@@ -2,9 +2,13 @@
 """Demo 1 through QRI: local CPU to local CPU over memcpy, placement from a reservation.
 
 Same program as backline/demos/demo_1_local_cpu_to_local_cpu_memcpy.py. The difference is where
-the nodes come from: the client states a resource intent, the (mock) QPM reserves matching
-inventory and returns a placement, and nodes_from_placement() builds the Backline from it. No
-host, path, or device name appears in this file.
+the nodes come from: the client states a resource intent, the QPM reserves matching inventory
+and returns a placement, and nodes_from_placement() builds the Backline from it. No host, path,
+or device name appears in this file.
+
+    ./demo_qri_1_local_memcpy.py          in-process mock QPM
+    ./demo_qri_1_local_memcpy.py --qfw    QFw's svc_backline_qpm; under `salloc --qpu=backline-local`
+                                          the reservation comes from QFW_RESERVATIONS
 """
 import sys
 import time
@@ -14,6 +18,7 @@ import pennylane as qp
 
 from mock_qpm import MockBacklineQPM
 from nodes import nodes_from_placement
+from qfw_qpm import QFwBacklineQPM, acquire_placement
 
 INTENT = {
     "version": 1,
@@ -34,21 +39,23 @@ def make_request(intent):
 
 
 def main():
-    # Phase 2: a QPMLifecycleBinding(...).api("admission") handle, reservation from QFW_RESERVATIONS.
-    qpm = MockBacklineQPM.from_inventory(Path(__file__).with_name("inventory.toml"))
+    if "--qfw" in sys.argv[1:]:
+        qpm = QFwBacklineQPM.connect()
+    else:
+        qpm = MockBacklineQPM.from_inventory(Path(__file__).with_name("inventory.toml"))
 
     caps = qpm.query()
-    print("offered:", {k: caps[k] for k in ("qec_codes", "controller_kinds",
-                                              "coprocessor_kinds", "transports")})
-
-    decision = qpm.reserve(request=make_request(INTENT))
-    if decision["status"] != "accepted":
-        sys.exit(f"rejected: {decision['reason']}: {decision['message']}")
-    rid = decision["reservation_id"]
-    print(f"reservation {rid}: placement {decision['placement']}")
+    print("offered:", {k: caps.get(k) for k in ("qec_codes", "controller_kinds",
+                                                  "coprocessor_kinds", "transports")})
 
     try:
-        dev = nodes_from_placement(decision["placement"])
+        placement, rid, owned = acquire_placement(qpm, make_request(INTENT))
+    except RuntimeError as e:
+        sys.exit(str(e))
+    print(f"reservation {rid}{'' if owned else ' (from Slurm)'}: placement {placement}")
+
+    try:
+        dev = nodes_from_placement(placement)
 
         @qp.qjit(capture=True)
         @qp.set_shots(10)
@@ -65,7 +72,8 @@ def main():
         print("samples:", samples)
         print(f"wall time (compile + run): {(t1 - t0) / 1e6:.1f} ms")
     finally:
-        print("release:", qpm.release(reservation_id=rid))
+        if owned:  # a Slurm reservation is released by the allocation's teardown
+            print("release:", qpm.release(reservation_id=rid))
 
     # The intent is checked, not merely accepted.
     bad = qpm.reserve(request=make_request({**INTENT, "qec": {"code": "surface_code"}}))

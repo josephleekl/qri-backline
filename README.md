@@ -7,3 +7,10 @@ Run (Python 3.12, `pennylane-catalyst==0.16.0b1` and PennyLane/Lightning `0.46.0
 
     python check_mock_qpm.py           # mock QPM self-check, no PennyLane needed
     python demo_qri_1_local_memcpy.py  # reserve -> placement -> qjit -> release, then a rejected surface_code request
+    python check_qfw_qpm.py            # QFw client adapter self-check (mock stands in for QFw)
+
+Against QFw's `svc_backline_qpm` (QFw branch `backline-qpm`), from an activated QFw environment
+with the service plane running:
+
+    python demo_qri_1_local_memcpy.py --qfw                          # reserves directly
+    salloc --qpu=backline-local ... python demo_qri_1_local_memcpy.py --qfw   # Slurm reserved; placement read from the reservation
