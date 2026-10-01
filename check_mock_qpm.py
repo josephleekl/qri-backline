@@ -100,6 +100,37 @@ def main():
     assert qpm.evaluate(request=request(qec={"code": "surface_code"}))["reason"] == "unsupported-qec-code"
     assert qpm.evaluate(request=request())["status"] == "accepted"
 
+    # outcome-only intent: no kinds, no transport, no coprocessors
+    d = qpm.reserve(request=request(controller={}, coprocessors=[], transport={}))
+    assert d["status"] == "accepted", d
+    assert d["placement"]["transport"] == "memcpy", d
+    assert len(d["placement"]["coprocessors"]) == 1, d
+    qpm.release(reservation_id=d["reservation_id"])
+    bare = request()
+    bare["resource_intent"] = {"version": 1, "qec": {"code": "steane"}}
+    d = qpm.reserve(request=bare)
+    assert d["status"] == "accepted", d
+    qpm.release(reservation_id=d["reservation_id"])
+
+    # malformed requests are rejected, never raised
+    def bad(mutate):
+        req = request()
+        mutate(req)
+        for call in (qpm.evaluate, qpm.reserve):
+            out = call(request=req)
+            assert out["status"] == "rejected" and out["reason"] == "invalid-request", (req, out)
+    bad(lambda r: r["task_class"].update(qubit_count="abc"))
+    bad(lambda r: r["task_class"].update(qubit_count=None))
+    bad(lambda r: r.update(task_class=None))
+    bad(lambda r: r["resource_intent"].update(qec="steane"))
+    bad(lambda r: r["resource_intent"].update(controller="cpu"))
+    bad(lambda r: r["resource_intent"].update(transport="memcpy"))
+    bad(lambda r: r["resource_intent"].update(latency=5))
+    bad(lambda r: r["resource_intent"].update(coprocessors="cpu"))
+    bad(lambda r: r["resource_intent"].update(coprocessors=["cpu"]))
+    bad(lambda r: r.update(ttl_ns="x"))
+    bad(lambda r: r.update(ttl_ns=0))
+
     # expiry frees entries; placement() refuses                       # Review Focus 3
     d = qpm.reserve(request=request())
     assert d["status"] == "accepted", d

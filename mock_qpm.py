@@ -28,6 +28,16 @@ def _rejected(reason, message):
     return {"status": "rejected", "reason": reason, "message": message}
 
 
+def _field(obj, key):
+    """obj[key] as a dict; missing means {}, anything else is an invalid request."""
+    value = obj.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise _Reject("invalid-request", f"{key} must be an object, got {type(value).__name__}")
+    return value
+
+
 def _default_catalyst_lib():
     spec = importlib.util.find_spec("catalyst")
     if spec is None or not spec.submodule_search_locations:
@@ -95,7 +105,7 @@ class MockBacklineQPM:
             return _rejected(r.reason, str(r))
         rid = str(next(self._ids))
         now = self._clock()
-        expires = now + int(request.get("ttl_ns", DEFAULT_TTL_NS))
+        expires = now + request.get("ttl_ns", DEFAULT_TTL_NS)
         placement = {
             "version": PLACEMENT_VERSION,
             "controller": {"name": ctrl["id"], "hardware": ctrl["hardware"],
@@ -168,36 +178,54 @@ class MockBacklineQPM:
         intent = request.get("resource_intent")
         if not isinstance(intent, dict) or intent.get("version") != PLACEMENT_VERSION:
             raise _Reject("invalid-request", "resource_intent with version 1 is required")
-        wires = int(request.get("task_class", {}).get("qubit_count", 0))
-        if wires < 1:
-            raise _Reject("invalid-request", "task_class.qubit_count (logical qubits) must be >= 1")
+        wires = _field(request, "task_class").get("qubit_count")
+        if type(wires) is not int or wires < 1:
+            raise _Reject("invalid-request", "task_class.qubit_count (logical qubits) must be an int >= 1")
+        ttl = request.get("ttl_ns", DEFAULT_TTL_NS)
+        if type(ttl) is not int or ttl < 1:
+            raise _Reject("invalid-request", "ttl_ns must be an int >= 1")
+        wanted = intent.get("coprocessors") or [{"role": "qec_decoder"}]
+        if not isinstance(wanted, list) or not all(isinstance(w, dict) for w in wanted):
+            raise _Reject("invalid-request", "resource_intent.coprocessors must be a list of objects")
+        code = _field(intent, "qec").get("code")
+        transport = _field(intent, "transport").get("preferred")
+        kind = _field(intent, "controller").get("kind")
+        limit = _field(intent, "latency").get("max_round_trip_us")
         inv = self.inventory
 
         # 1. QEC code
-        code = intent.get("qec", {}).get("code")
         codes = sorted({d["code"] for d in inv.get("decoder", [])})
         if code not in codes:
             raise _Reject("unsupported-qec-code",
                           f"qec code {code!r} is not offered; supported: {codes}")
 
-        # 2. controller (kind hint, capacity in wires), then its transport
-        transport = intent.get("transport", {}).get("preferred")
-        kind = intent.get("controller", {}).get("kind")
+        # 2. controller (kind hint, capacity in wires)
         ctrls = [c for c in inv.get("controller", [])
                  if kind in (None, c["hardware"]) and c["max_wires"] >= wires]
         if not ctrls:
             raise _Reject("no-matching-controller",
                           f"no controller of kind {kind!r} with {wires} wires")
+
+        if transport is not None:
+            return self._match_on(transport, ctrls, wanted, code, limit, wires, busy)
+        # Outcome-only intent: first transport that the controller and
+        # every coprocessor share; report the first transport's reason if none fits.
+        first = None
+        for t in sorted({t for c in ctrls for t in c["transports"]}):
+            try:
+                return self._match_on(t, ctrls, wanted, code, limit, wires, busy)
+            except _Reject as r:
+                first = first or r
+        raise first or _Reject("unsupported-transport", "no controller lists a transport")
+
+    def _match_on(self, transport, ctrls, wanted, code, limit, wires, busy):
+        inv = self.inventory
         ctrls = [c for c in ctrls if transport in c["transports"]]
         if not ctrls:
             raise _Reject("unsupported-transport",
                           f"no matching controller supports transport {transport!r}")
 
         # 3-4. each coprocessor: decoder, transport, latency
-        wanted = intent.get("coprocessors", [])
-        if not wanted:
-            raise _Reject("no-matching-coprocessor", "resource_intent requests no coprocessors")
-        limit = intent.get("latency", {}).get("max_round_trip_us")
         options = []
         for i, want in enumerate(wanted):
             if want.get("decoder") == "client":
@@ -228,6 +256,8 @@ class MockBacklineQPM:
             options.append(opts)
 
         # 5. capacity: exclusive, first free choice per role
+        # ponytail: greedy assignment; can miss a fit with several interchangeable
+        # coprocessors of different reach. Bipartite matching if inventories grow.
         taken = set(busy)
         ctrl = next((c for c in ctrls if c["id"] not in taken), None)
         if ctrl is None:
