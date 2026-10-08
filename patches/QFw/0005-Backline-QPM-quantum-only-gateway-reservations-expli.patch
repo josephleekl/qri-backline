@@ -1,7 +1,7 @@
 From 9fcec52fa6d8670406be23bd88e596c7c72286eb Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 8 Oct 2026 10:23:38 -0400
-Subject: [PATCH 5/5] Backline QPM: quantum-only gateway reservations; explicit
+Subject: [PATCH 5/6] Backline QPM: quantum-only gateway reservations; explicit
  classical request; executor per reservation
 
 ---

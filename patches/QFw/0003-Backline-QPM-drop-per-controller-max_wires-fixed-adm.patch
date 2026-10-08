@@ -1,7 +1,7 @@
 From 13d82aa2d8496ae40317e0e7164092bf075be21a Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 8 Oct 2026 10:22:00 -0400
-Subject: [PATCH 3/5] Backline QPM: drop per-controller max_wires; fixed
+Subject: [PATCH 3/6] Backline QPM: drop per-controller max_wires; fixed
  admission qubit limit
 
 ---

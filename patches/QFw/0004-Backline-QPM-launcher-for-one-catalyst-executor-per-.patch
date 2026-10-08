@@ -1,7 +1,7 @@
 From 6d6e543483b4057be108be8a6c01c0d25048d805 Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 8 Oct 2026 10:22:28 -0400
-Subject: [PATCH 4/5] Backline QPM: launcher for one catalyst-executor per
+Subject: [PATCH 4/6] Backline QPM: launcher for one catalyst-executor per
  reservation
 
 ---
