@@ -1,7 +1,7 @@
-From 32e2847ece1164bce8b6b09568cdd63792c865cf Mon Sep 17 00:00:00 2001
+From 5b32fba98ec91f27481129518ba9816b2b2a9f29 Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 1 Oct 2026 13:00:37 -0400
-Subject: [PATCH] Wire the Backline QPM (backline-local) into the cluster
+Subject: [PATCH 1/2] Wire the Backline QPM (backline-local) into the cluster
 
 Adds a backline-head node, the backline-local service and --qpu mapping,
 device and user entries, a backline environment module and a script that
@@ -297,7 +297,7 @@ index 41f5a57..04c4ea5 100755
  
  die() {
 diff --git a/tools/qfw-site-services b/tools/qfw-site-services
-index 7a717a7..683ad60 100755
+index 51081d5..5512eef 100755
 --- a/tools/qfw-site-services
 +++ b/tools/qfw-site-services
 @@ -14,6 +14,7 @@ QFW_SHIM_NODE="${QFW_SHIM_NODE:-shim-head}"
@@ -329,7 +329,7 @@ index 7a717a7..683ad60 100755
    --json     Emit one machine-readable status document
    --dry-run  Print the commands without executing them
  EOF
-@@ -328,6 +332,11 @@ stop_fake_iqm() {
+@@ -371,6 +375,11 @@ stop_fake_iqm() {
  		--run-dir "${fake_iqm_run_dir}"
  }
  
@@ -341,7 +341,7 @@ index 7a717a7..683ad60 100755
  start_gateway() {
  	require_directory || return 1
  	if prepare_component_start \
-@@ -384,6 +393,11 @@ fake_iqm_ready() {
+@@ -427,6 +436,11 @@ fake_iqm_ready() {
  		--run-dir "${fake_iqm_run_dir}"
  }
  
@@ -353,7 +353,7 @@ index 7a717a7..683ad60 100755
  require_directory() {
  	if directory_ready >/dev/null 2>&1; then
  		return 0
-@@ -416,6 +430,9 @@ require_directory_dependents_stopped() {
+@@ -459,6 +473,9 @@ require_directory_dependents_stopped() {
  	if fake_iqm_ready >/dev/null 2>&1; then
  		active+=(fake-iqm)
  	fi
@@ -363,7 +363,7 @@ index 7a717a7..683ad60 100755
  	if gateway_managed_ready >/dev/null 2>&1; then
  		active+=(gateway)
  	fi
-@@ -536,6 +553,20 @@ start_fake_iqm() {
+@@ -579,6 +596,20 @@ start_fake_iqm() {
  		--timeout "${QFW_SITE_START_TIMEOUT}"
  }
  
@@ -384,7 +384,7 @@ index 7a717a7..683ad60 100755
  start_services() {
  	local directory_started=false
  	local nwqsim_started=false
-@@ -921,6 +952,9 @@ stop_services() {
+@@ -964,6 +995,9 @@ stop_services() {
  
  	stop_gateway || status=1
  	stop_fake_iqm || status=1
@@ -394,7 +394,7 @@ index 7a717a7..683ad60 100755
  	stop_aws || status=1
  	stop_ibm || status=1
  	stop_shim || status=1
-@@ -931,6 +965,11 @@ stop_services() {
+@@ -974,6 +1008,11 @@ stop_services() {
  }
  
  target_status() {
@@ -406,7 +406,7 @@ index 7a717a7..683ad60 100755
  	service_status
  }
  
-@@ -944,6 +983,7 @@ start_target() {
+@@ -987,6 +1026,7 @@ start_target() {
  	ibm) start_ibm ;;
  	aws) start_aws ;;
  	fake-iqm) start_fake_iqm ;;
@@ -414,7 +414,7 @@ index 7a717a7..683ad60 100755
  	gateway) start_gateway ;;
  	esac
  }
-@@ -961,6 +1001,7 @@ stop_target() {
+@@ -1004,6 +1044,7 @@ stop_target() {
  	ibm) stop_ibm ;;
  	aws) stop_aws ;;
  	fake-iqm) stop_fake_iqm ;;
@@ -422,7 +422,7 @@ index 7a717a7..683ad60 100755
  	gateway) stop_gateway ;;
  	esac
  }
-@@ -1022,7 +1063,7 @@ main() {
+@@ -1065,7 +1106,7 @@ main() {
  		return 2
  	}
  	case "${target}" in

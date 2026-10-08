@@ -1,0 +1,165 @@
+From 0ebc179c3bea7c005f95877b4258dcdec0edb198 Mon Sep 17 00:00:00 2001
+From: Joseph Lee <joseph.lee@xanadu.ai>
+Date: Thu, 8 Oct 2026 10:29:02 -0400
+Subject: [PATCH 2/2] Backline QPM: qec-backline-head node, plugin.conf
+ mapping, demo checkout
+
+---
+ config/qfw-slurm/plugin.conf   |  3 +++
+ docker-compose.yml             |  6 +++---
+ docs/backline.md               | 35 ++++++++++++++++++----------------
+ slurm.conf                     |  4 ++--
+ tools/install-backline-venv.sh |  3 +++
+ tools/provision-qfw-cluster.sh |  2 +-
+ tools/qfw-site-services        |  2 +-
+ 7 files changed, 32 insertions(+), 23 deletions(-)
+
+diff --git a/config/qfw-slurm/plugin.conf b/config/qfw-slurm/plugin.conf
+index b1f6258..f9b74f2 100644
+--- a/config/qfw-slurm/plugin.conf
++++ b/config/qfw-slurm/plugin.conf
+@@ -27,3 +27,6 @@ service_id=shim-aws-qpm
+ 
+ [resource "fake-iqm-20q"]
+ service_id=fake-iqm
++
++[resource "backline-local"]
++service_id=backline-local
+diff --git a/docker-compose.yml b/docker-compose.yml
+index fec7697..8f97037 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -489,13 +489,13 @@ services:
+     networks:
+       - slurm-network
+ 
+-  backline-head:
++  qec-backline-head:
+     <<: *slurmd-resources
+     image: ${IMAGE_NAME}:${IMAGE_TAG}
+     init: true
+     command: ["slurmd"]
+-    hostname: backline-head
+-    container_name: backline-head
++    hostname: qec-backline-head
++    container_name: qec-backline-head
+     volumes:
+       - root_ssh:/root/.ssh
+       - etc_munge:/etc/munge
+diff --git a/docs/backline.md b/docs/backline.md
+index 9852cb2..87a0b22 100644
+--- a/docs/backline.md
++++ b/docs/backline.md
+@@ -5,7 +5,7 @@
+ transport from the site inventory; the application reads that placement and runs its
+ PennyLane/Catalyst program on it. It never sends circuits through QRI.
+ 
+-It runs on `backline-head` and is opt-in: `qfw-site-services start` (target `all`) does not
++It runs on `qec-backline-head` and is opt-in: `qfw-site-services start` (target `all`) does not
+ start it.
+ 
+ ## Set up once
+@@ -23,21 +23,24 @@ shared venv, so the QPM's inventory finds the precompiled decoders.
+ 
+ ## Run a Backline program
+ 
++The job script is `qri-backline/examples/job.sh`, cloned to
++`/workspace/qfw-container-base/qri-backline` by `tools/install-backline-venv.sh`:
++
+ ```bash
+-#!/bin/bash
+-#SBATCH --qpu=backline-local --workload-kind=quantum
+-#SBATCH --circ-count=1 --max-qubits=3 --max-depth=3 --max-shots=10
+-#SBATCH -N 1
+-
+-module load backline
+-source "${QFW_PREFIX}/bin/qfw-activate" --venv "${BACKLINE_VENV}"
+-qfw-srun demo_qri_1_local_memcpy.py --qfw
++sbatch /workspace/qfw-container-base/qri-backline/examples/job.sh
+ ```
+ 
+-qfw-slurm reserves `backline-local` while the job is allocated; the QPM applies its default
+-intent (Steane decoding, any matching controller and coprocessor). Each step gets
+-`QFW_RESERVATIONS`; the program reads its placement with `get_reservation` and does not
+-release it. The allocation's teardown does.
++The job makes two requests:
++
++1. **Quantum resources.** The `#SBATCH --qpu=backline-local ...` lines. qfw-slurm reserves
++   `backline-local`'s quantum budget while the job is allocated and passes the reservation to
++   each step in `QFW_RESERVATIONS`. The allocation's teardown releases it.
++2. **Classical QEC resources.** The program asks the QPM for them against that reservation
++   (`reserve` with `for_reservation` and the `resource_intent` in
++   `intents/cpu-steane-memcpy.yaml`: a CPU controller, a Steane decoder, memcpy). The QPM
++   starts a `catalyst-executor` on `qec-backline-head` for the reservation and returns its
++   address in the placement; the program compiles locally and runs controller and decoder
++   there. The executor stops when the reservation ends.
+ 
+ `--max-qubits` counts logical qubits.
+ 
+@@ -45,9 +48,9 @@ release it. The allocation's teardown does.
+ 
+ | File | Role |
+ | --- | --- |
+-| `docker-compose.yml`, `slurm.conf`, `tools/provision-qfw-cluster.sh` | the `backline-head` node |
++| `docker-compose.yml`, `slurm.conf`, `tools/provision-qfw-cluster.sh` | the `qec-backline-head` node |
+ | `config/site-services.yaml` | the `backline-local` service, loading the `backline` module |
+ | `config/device-access.yaml`, `config/qpu-users.json` | device record and user entitlement |
+-| `config/qfw-slurm/resources.lua` | `--qpu=backline-local` |
+-| `modulefiles/backline`, `tools/install-backline-venv.sh` | the shared Backline venv |
++| `config/qfw-slurm/resources.lua`, `config/qfw-slurm/plugin.conf` | `--qpu=backline-local` |
++| `modulefiles/backline`, `tools/install-backline-venv.sh` | the shared Backline venv and the demo checkout |
+ | `tools/qfw-site-services` | `--target backline` start, stop, status |
+diff --git a/slurm.conf b/slurm.conf
+index 2d11100..16d8af7 100644
+--- a/slurm.conf
++++ b/slurm.conf
+@@ -120,9 +120,9 @@ NodeName=shim-head Features=qfw-service,shim,qpm,qpm-shim-ornl-20q CPUs=4 Socket
+ NodeName=ibm-156-nh Features=qfw-service,ibm,qpm,qpm-shim-ibm-156-nh CPUs=4 Sockets=1 CoresPerSocket=4 ThreadsPerCore=1 RealMemory=6000 State=UNKNOWN
+ NodeName=aws Features=qfw-service,aws,qpm,qpm-shim-aws-qpm CPUs=4 Sockets=1 CoresPerSocket=4 ThreadsPerCore=1 RealMemory=6000 State=UNKNOWN
+ NodeName=fake-iqm-head Features=qfw-service,fake-iqm,qpm,qpm-fake-iqm CPUs=4 Sockets=1 CoresPerSocket=4 ThreadsPerCore=1 RealMemory=6000 State=UNKNOWN
+-NodeName=backline-head Features=qfw-service,backline,qpm,qpm-backline-local CPUs=4 Sockets=1 CoresPerSocket=4 ThreadsPerCore=1 RealMemory=6000 State=UNKNOWN
++NodeName=qec-backline-head Features=qfw-service,backline,qpm,qpm-backline-local CPUs=4 Sockets=1 CoresPerSocket=4 ThreadsPerCore=1 RealMemory=6000 State=UNKNOWN
+ 
+ #
+ # PARTITIONS
+ PartitionName=normal Default=YES Nodes=c[1-8] Priority=50 DefMemPerCPU=200 OverSubscribe=EXCLUSIVE MaxTime=5-00:00:00 DefaultTime=5-00:00:00 State=UP
+-PartitionName=qfw-services Default=NO Nodes=nwqsim-head,nwqsim-worker-[1-2],iqm-head,shim-head,ibm-156-nh,aws,fake-iqm-head,backline-head AllowGroups=root Priority=10 DefMemPerCPU=200 OverSubscribe=EXCLUSIVE MaxTime=1-00:00:00 DefaultTime=01:00:00 State=UP
++PartitionName=qfw-services Default=NO Nodes=nwqsim-head,nwqsim-worker-[1-2],iqm-head,shim-head,ibm-156-nh,aws,fake-iqm-head,qec-backline-head AllowGroups=root Priority=10 DefMemPerCPU=200 OverSubscribe=EXCLUSIVE MaxTime=1-00:00:00 DefaultTime=01:00:00 State=UP
+diff --git a/tools/install-backline-venv.sh b/tools/install-backline-venv.sh
+index 1f3580b..370b8bd 100755
+--- a/tools/install-backline-venv.sh
++++ b/tools/install-backline-venv.sh
+@@ -24,4 +24,7 @@ release="https://github.com/PennyLaneAI"
+ 
+ lib="$("${venv}/bin/python" -c 'import importlib.util, pathlib; print(pathlib.Path(list(importlib.util.find_spec("catalyst").submodule_search_locations)[0]) / "lib")')"
+ test -f "${lib}/libsteane_coprocessor_cpu.so"
++# The demo program, on the shared volume so jobs on any compute node can run it.
++demo="${QRI_BACKLINE_DIR:-/workspace/qfw-container-base/qri-backline}"
++[ -d "${demo}/.git" ] || git clone -q https://github.com/josephleekl/qri-backline "${demo}"
+ echo "backline venv ready: ${venv} (decoders in ${lib})"
+diff --git a/tools/provision-qfw-cluster.sh b/tools/provision-qfw-cluster.sh
+index 04c4ea5..73cb23e 100755
+--- a/tools/provision-qfw-cluster.sh
++++ b/tools/provision-qfw-cluster.sh
+@@ -15,7 +15,7 @@ containers=(
+ 	slurmdbd slurmctld slurmrestd
+ 	c1 c2 c3 c4 c5 c6 c7 c8
+ 	nwqsim-head nwqsim-worker-1 nwqsim-worker-2
+-	iqm-head shim-head ibm-156-nh aws fake-iqm-head backline-head
++	iqm-head shim-head ibm-156-nh aws fake-iqm-head qec-backline-head
+ )
+ 
+ die() {
+diff --git a/tools/qfw-site-services b/tools/qfw-site-services
+index 5512eef..ce620d2 100755
+--- a/tools/qfw-site-services
++++ b/tools/qfw-site-services
+@@ -14,7 +14,7 @@ QFW_SHIM_NODE="${QFW_SHIM_NODE:-shim-head}"
+ QFW_IBM_NODE="${QFW_IBM_NODE:-ibm-156-nh}"
+ QFW_AWS_NODE="${QFW_AWS_NODE:-aws}"
+ QFW_FAKE_IQM_NODE="${QFW_FAKE_IQM_NODE:-fake-iqm-head}"
+-QFW_BACKLINE_NODE="${QFW_BACKLINE_NODE:-backline-head}"
++QFW_BACKLINE_NODE="${QFW_BACKLINE_NODE:-qec-backline-head}"
+ QFW_SIMULATOR_NODES="${QFW_SIMULATOR_NODES:-nwqsim-head,nwqsim-worker-1,nwqsim-worker-2}"
+ QFW_GATEWAY_HOST="${QFW_GATEWAY_HOST:-slurmctld}"
+ QFW_GATEWAY_PORT="${QFW_GATEWAY_PORT:-18095}"

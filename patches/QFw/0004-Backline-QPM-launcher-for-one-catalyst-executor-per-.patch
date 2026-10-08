@@ -1,0 +1,148 @@
+From 6d6e543483b4057be108be8a6c01c0d25048d805 Mon Sep 17 00:00:00 2001
+From: Joseph Lee <joseph.lee@xanadu.ai>
+Date: Thu, 8 Oct 2026 10:22:28 -0400
+Subject: [PATCH 4/5] Backline QPM: launcher for one catalyst-executor per
+ reservation
+
+---
+ services/svc_backline_qpm/executors.py | 80 ++++++++++++++++++++++++++
+ tests/mock/test_backline_executors.py  | 43 ++++++++++++++
+ 2 files changed, 123 insertions(+)
+ create mode 100644 services/svc_backline_qpm/executors.py
+ create mode 100644 tests/mock/test_backline_executors.py
+
+diff --git a/services/svc_backline_qpm/executors.py b/services/svc_backline_qpm/executors.py
+new file mode 100644
+index 0000000..139b038
+--- /dev/null
++++ b/services/svc_backline_qpm/executors.py
+@@ -0,0 +1,80 @@
++# catalyst-executor processes owned by the Backline QPM, one per reservation.
++#
++# The executor hosts the reservation's controller and decoder code (dispatched
++# by the client over ORC) in one process, so memcpy can connect them. Remote
++# Backline nodes name libraries by bare filename, so the executor runs with
++# Catalyst's lib/ as working directory and on LD_LIBRARY_PATH.
++
++import os
++import signal
++import socket
++import subprocess
++import tempfile
++import time
++from dataclasses import dataclass
++from pathlib import Path
++
++RUNTIME_PLUGINS = ("librt_transport.so", "librt_capi.so")
++# First line catalyst-executor prints once bound (as matched by
++# catalyst.executor.utils.OutputPatterns).
++_READY = "Listening on"
++
++
++class ExecutorStartError(RuntimeError):
++	pass
++
++
++@dataclass
++class Running:
++	address: str
++	process: object
++	log_path: str
++
++
++def _free_port():
++	with socket.socket() as s:
++		s.bind(("", 0))
++		return s.getsockname()[1]
++
++
++def start(catalyst_lib, plugins, binary=None, log_dir=None, timeout_s=30.0):
++	lib = Path(catalyst_lib)
++	port = _free_port()
++	log_dir = Path(log_dir or os.environ.get("QFW_LOG_DIR") or
++		       tempfile.gettempdir())
++	log_path = str(log_dir / f"backline-executor-{port}.log")
++	argv = [binary or str(lib / "catalyst-executor"),
++		f"--bind=0.0.0.0:{port}"]
++	argv += [f"--plugin={lib / p}" for p in plugins]
++	env = dict(os.environ)
++	env["LD_LIBRARY_PATH"] = os.pathsep.join(
++		p for p in (str(lib), os.environ.get("LD_LIBRARY_PATH")) if p)
++	with open(log_path, "w") as log:
++		proc = subprocess.Popen(argv, cwd=lib, env=env,
++					stdin=subprocess.DEVNULL, stdout=log,
++					stderr=subprocess.STDOUT,
++					start_new_session=True)
++	running = Running(f"{socket.gethostname()}:{port}", proc, log_path)
++	deadline = time.monotonic() + timeout_s
++	while time.monotonic() < deadline and proc.poll() is None:
++		if _READY in Path(log_path).read_text(errors="replace"):
++			return running
++		time.sleep(0.1)
++	stop(running)
++	raise ExecutorStartError(
++		f"catalyst-executor did not become ready; see {log_path}")
++
++
++def stop(running):
++	# The executor forks a child per connection, so stop the whole group.
++	proc = running.process
++	if proc is None or proc.poll() is not None:
++		return
++	try:
++		os.killpg(proc.pid, signal.SIGTERM)
++		proc.wait(timeout=5)
++	except ProcessLookupError:
++		pass
++	except subprocess.TimeoutExpired:
++		os.killpg(proc.pid, signal.SIGKILL)
++		proc.wait()
+diff --git a/tests/mock/test_backline_executors.py b/tests/mock/test_backline_executors.py
+new file mode 100644
+index 0000000..8c2fc8f
+--- /dev/null
++++ b/tests/mock/test_backline_executors.py
+@@ -0,0 +1,43 @@
++import socket
++import stat
++import time
++
++import pytest
++
++from svc_backline_qpm import executors
++
++
++def _fake_binary(tmp_path, body):
++	path = tmp_path / "catalyst-executor"
++	path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
++	path.chmod(path.stat().st_mode | stat.S_IEXEC)
++	return str(path)
++
++
++def test_start_waits_for_ready_and_stop_kills_the_group(tmp_path):
++	binary = _fake_binary(tmp_path, 'echo "$@"; echo "Listening on 0.0.0.0:1"; sleep 60')
++	running = executors.start(tmp_path, ["libdecoder.so"], binary=binary,
++				   log_dir=tmp_path)
++	host, port = running.address.rsplit(":", 1)
++	assert host == socket.gethostname() and int(port) > 0
++	log = open(running.log_path).read()
++	assert f"--bind=0.0.0.0:{port}" in log
++	assert f"--plugin={tmp_path / 'libdecoder.so'}" in log
++	assert running.process.poll() is None
++	executors.stop(running)
++	assert running.process.poll() is not None
++
++
++def test_start_fails_when_the_executor_exits(tmp_path):
++	binary = _fake_binary(tmp_path, "exit 3")
++	with pytest.raises(executors.ExecutorStartError, match="did not become ready"):
++		executors.start(tmp_path, [], binary=binary, log_dir=tmp_path)
++
++
++def test_start_times_out_and_cleans_up(tmp_path):
++	binary = _fake_binary(tmp_path, "sleep 60")
++	t0 = time.monotonic()
++	with pytest.raises(executors.ExecutorStartError):
++		executors.start(tmp_path, [], binary=binary, log_dir=tmp_path,
++				timeout_s=0.5)
++	assert time.monotonic() - t0 < 10

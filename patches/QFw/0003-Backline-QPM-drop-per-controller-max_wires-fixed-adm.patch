@@ -1,0 +1,132 @@
+From 13d82aa2d8496ae40317e0e7164092bf075be21a Mon Sep 17 00:00:00 2001
+From: Joseph Lee <joseph.lee@xanadu.ai>
+Date: Thu, 8 Oct 2026 10:22:00 -0400
+Subject: [PATCH 3/5] Backline QPM: drop per-controller max_wires; fixed
+ admission qubit limit
+
+---
+ services/svc_backline_qpm/inventory.yaml |  5 ++---
+ services/svc_backline_qpm/matcher.py     | 10 +++++-----
+ services/svc_backline_qpm/svc_qpm.py     | 11 ++++++-----
+ tests/mock/test_backline_qpm.py          | 12 +++++++++---
+ 4 files changed, 22 insertions(+), 16 deletions(-)
+
+diff --git a/services/svc_backline_qpm/inventory.yaml b/services/svc_backline_qpm/inventory.yaml
+index c09d18d..f7e730e 100644
+--- a/services/svc_backline_qpm/inventory.yaml
++++ b/services/svc_backline_qpm/inventory.yaml
+@@ -8,9 +8,8 @@
+ controller:
+   - id: local-cpu-ctrl
+     hardware: cpu
+-    devices:
+-      - null.qubit
+-    max_wires: 64
++    device: null.qubit
++    device_lib: librtd_null_qubit.so     # plugin the executor loads for this simulator
+     transports:
+       - memcpy
+ 
+diff --git a/services/svc_backline_qpm/matcher.py b/services/svc_backline_qpm/matcher.py
+index 62c0e23..bc3238f 100644
+--- a/services/svc_backline_qpm/matcher.py
++++ b/services/svc_backline_qpm/matcher.py
+@@ -5,8 +5,8 @@
+ # inventory entries that satisfy the intent and returns the placement the
+ # client builds its Backline nodes from. Nothing else in QFw reads either.
+ #
+-# Matching order, first failure wins: QEC code, controller (kind, logical
+-# qubits), per coprocessor decoder + transport + latency, then capacity.
++# Matching order, first failure wins: QEC code, controller kind, per
++# coprocessor decoder + transport + latency, then capacity.
+ 
+ import importlib.util
+ import os
+@@ -103,10 +103,10 @@ def match(inventory, intent, qubit_count, busy):
+ 			     f"qec code {code!r} is not offered; supported: {codes}")
+ 
+ 	ctrls = [c for c in inventory.get("controller", [])
+-		 if kind in (None, c["hardware"]) and c["max_wires"] >= qubit_count]
++		 if kind in (None, c["hardware"])]
+ 	if not ctrls:
+ 		raise Reject("no-matching-controller",
+-			     f"no controller of kind {kind!r} with {qubit_count} wires")
++			     f"no controller of kind {kind!r}")
+ 
+ 	if transport is not None:
+ 		return _match_on(inventory, transport, ctrls, wanted, code, limit,
+@@ -186,7 +186,7 @@ def _match_on(inventory, transport, ctrls, wanted, code, limit, qubit_count,
+ 	placement = {
+ 		"version": PLACEMENT_VERSION,
+ 		"controller": {"name": ctrl["id"], "hardware": ctrl["hardware"],
+-			       "device": {"name": ctrl["devices"][0],
++			       "device": {"name": ctrl["device"],
+ 					  "wires": qubit_count}},
+ 		"coprocessors": [
+ 			{"name": c["id"], "hardware": c["hardware"],
+diff --git a/services/svc_backline_qpm/svc_qpm.py b/services/svc_backline_qpm/svc_qpm.py
+index 7b24558..5b9758e 100644
+--- a/services/svc_backline_qpm/svc_qpm.py
++++ b/services/svc_backline_qpm/svc_qpm.py
+@@ -15,6 +15,10 @@ BACKLINE_PROVIDER = "backline"
+ BACKLINE_TARGET_ID = "backline-local"
+ DEFAULT_INVENTORY = Path(__file__).with_name("inventory.yaml")
+ 
++# QFw admission limit for this QPM, in logical qubits. A policy value, not a
++# device property; qhw-admission requires it > 0 and rejects larger requests.
++MAX_QUBITS = 3
++
+ # Applied when a reserve request carries no resource_intent, as from the
+ # qfw-slurm gateway: there the selected service name is the intent.
+ DEFAULT_INTENT = {
+@@ -76,9 +80,6 @@ class QPM(UTIL_QPM):
+ 			os.environ.get("QFW_BACKLINE_INVENTORY") or DEFAULT_INVENTORY)
+ 		self._placements = {}
+ 		self._placement_lock = threading.Lock()
+-		max_qubits = max(
+-			(c["max_wires"] for c in self.inventory.get("controller", [])),
+-			default=0)
+ 		super().__init__(
+ 			QRC(start=start),
+ 			max_ppn=1,
+@@ -86,11 +87,11 @@ class QPM(UTIL_QPM):
+ 			target_id=BACKLINE_TARGET_ID,
+ 			admission_context_factory=admission_context_factory,
+ 			scheduler_context_factory=scheduler_context_factory)
+-		set_max_qubits_pp(max_qubits)
++		set_max_qubits_pp(MAX_QUBITS)
+ 		device_id = self.controller.canonicalize_external_id(
+ 			"device_id", BACKLINE_TARGET_ID)
+ 		self.configure_device_profile(
+-			profile=backline_profile(device_id, max_qubits))
++			profile=backline_profile(device_id, MAX_QUBITS))
+ 
+ 	def query(self):
+ 		from . import SERVICE_NAME, SERVICE_DESC, svc_info
+diff --git a/tests/mock/test_backline_qpm.py b/tests/mock/test_backline_qpm.py
+index d4ea37a..232cf5f 100644
+--- a/tests/mock/test_backline_qpm.py
++++ b/tests/mock/test_backline_qpm.py
+@@ -13,9 +13,8 @@ INVENTORY = """
+ controller:
+   - id: local-cpu-ctrl
+     hardware: cpu
+-    devices:
+-      - null.qubit
+-    max_wires: 64
++    device: null.qubit
++    device_lib: librtd_null_qubit.so
+     transports:
+       - memcpy
+ coprocessor:
+@@ -168,3 +167,10 @@ def test_expired_reservation_frees_components(monkeypatch, tmp_path):
+ 		reservation_id=first["reservation_id"])
+ 	second = qpm.reserve(request=_request("job-b"))
+ 	assert second["status"] == "accepted", second
++
++
++def test_admission_profile_uses_the_qpm_qubit_limit(monkeypatch, tmp_path):
++	from svc_backline_qpm.svc_qpm import MAX_QUBITS
++	qpm = _qpm(monkeypatch, tmp_path)
++	profile = qpm.controller.admission_context.registered_profiles[-1]
++	assert profile["max_qubits"] == MAX_QUBITS == 3

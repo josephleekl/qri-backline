@@ -1,7 +1,7 @@
-From c5f61c23555c64b51a49f7fdb14fa2b6651c038d Mon Sep 17 00:00:00 2001
+From 662e498bd1117022b9787bcd04ec550a9accf254 Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 1 Oct 2026 12:37:18 -0400
-Subject: [PATCH 1/2] Add Backline QPM: reserve QEC controllers, decoders and
+Subject: [PATCH 1/5] Add Backline QPM: reserve QEC controllers, decoders and
  transports
 
 A client-executed QPM. reserve() matches a resource_intent against the

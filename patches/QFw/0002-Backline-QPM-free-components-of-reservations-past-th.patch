@@ -1,7 +1,7 @@
-From 7e156dd1db4975c611b4bf4d317841581fbb71a8 Mon Sep 17 00:00:00 2001
+From 9a934927f280a1082462e3eeb638319e6e7db876 Mon Sep 17 00:00:00 2001
 From: Joseph Lee <joseph.lee@xanadu.ai>
 Date: Thu, 1 Oct 2026 12:39:21 -0400
-Subject: [PATCH 2/2] Backline QPM: free components of reservations past their
+Subject: [PATCH 2/5] Backline QPM: free components of reservations past their
  deadline
 
 ---
