@@ -1,10 +1,8 @@
-"""Reach the Backline QPM through QFw instead of the in-process mock.
+"""Reach QFw's Backline QPM (`svc_backline_qpm`, service `backline-local`) over QRI.
 
-QFwBacklineQPM wraps QFw's admission binding for the `backline-local` service
-(`svc_backline_qpm` in QFw) with the same methods as MockBacklineQPM, so the demo runs against
-either. Under Slurm (`salloc --qpu=backline-local`) the gateway has already reserved, and
-QFW_RESERVATIONS names the reservation: the client then reads the placement and leaves the
-release to Slurm's teardown.
+Under Slurm (`--qpu=backline-local`) the gateway has already made the quantum reservation and
+QFW_RESERVATIONS names it: the client then requests its classical QEC resources against it and
+leaves the release to Slurm's teardown.
 """
 import json
 import os
@@ -86,15 +84,21 @@ class QFwBacklineQPM:
         return self._admission.get_reservation(token=token, reservation_id=reservation_id)
 
 
-def acquire_placement(qpm, request):
-    """(placement, reservation_id, owned). owned=False when Slurm reserved and will release."""
+def acquire_placement(qpm, quantum_request, intent):
+    """(placement, reservation_id, owned). owned=False when Slurm reserved and will release.
+
+    Under Slurm the quantum reservation already exists; this makes the separate classical QEC
+    request against it. Otherwise one reserve carries both.
+    """
     rid = getattr(qpm, "reservation_id", None)
     if rid is not None:
-        placement = qpm.get_reservation(reservation_id=rid).get("placement")
-        if placement is None:
-            raise RuntimeError(f"reservation {rid} carries no placement (released or expired?)")
-        return placement, rid, False
-    decision = qpm.reserve(request=request)
+        decision = qpm.reserve(request={**quantum_request, "for_reservation": rid,
+                                        "resource_intent": intent})
+        if decision.get("status") != "accepted":
+            raise RuntimeError(f"classical QEC request rejected: {decision.get('reason')}: "
+                               f"{decision.get('message')}")
+        return decision["placement"], rid, False
+    decision = qpm.reserve(request={**quantum_request, "resource_intent": intent})
     if decision.get("status") != "accepted":
         raise RuntimeError(f"rejected: {decision.get('reason')}: {decision.get('message')}")
     return decision["placement"], decision["reservation_id"], True

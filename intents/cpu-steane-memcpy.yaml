@@ -1,0 +1,15 @@
+# Classical QEC resources this program requests (in addition to the quantum
+# reservation made through Slurm / QRI). For a GPU decoder, a GPU-enabled
+# Catalyst build and inventory entry are needed; then set kind: gpu below.
+version: 1
+controller:
+  role: qpu_control
+  kind: cpu
+coprocessors:
+  - role: qec_decoder
+    kind: cpu
+    decoder: steane
+transport:
+  preferred: memcpy
+qec:
+  code: steane
