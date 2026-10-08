@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Stand-in for the qfw-slurm gateway: reserve backline-local with no intent (the service name
-is the intent) and print the QFW_RESERVATIONS tuple. With --release RID, release it instead."""
+"""Stand-in for the qfw-slurm gateway: reserve backline-local's quantum budget only (no intent)
+and print the QFW_RESERVATIONS tuple. With --release RID, release it instead."""
 import getpass
 import json
+import os
 import sys
 import uuid
 
@@ -13,7 +14,7 @@ qpm = QFwBacklineQPM.connect()
 if sys.argv[1:2] == ["--release"]:
     print(qpm.release(reservation_id=sys.argv[2]))
     sys.exit(0)
-job = f"gw-{uuid.uuid4().hex[:8]}"
+job = os.environ.get("SLURM_JOB_ID") or f"gw-{uuid.uuid4().hex[:8]}"
 d = qpm.reserve(request={
     "owner": {"user": getpass.getuser()}, "job_id": job, "scope_id": job,
     "target_device_id": "backline-local", "walltime_ns": 120_000_000_000,
