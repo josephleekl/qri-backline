@@ -1,31 +1,33 @@
 """Turn a QPM placement into PennyLane Backline nodes.
 
-The only client-side code that knows the placement schema. Replaces demos/placement.py: nothing
-here is site-specific; every value comes from the reservation's placement.
+The only client-side code that knows the placement schema; every value comes from the
+reservation's placement. The controller and decoders run on the executor the QPM started for the
+reservation (one process, so memcpy connects them).
 """
 import pennylane as qp
-
-_REMOTE_FIELDS = ("executor", "endpoint")
+from catalyst.executor import Executor
 
 
 def nodes_from_placement(placement):
     if placement.get("version") != 1:
         raise ValueError(f"unsupported placement version {placement.get('version')!r}")
     nodes = [placement["controller"], *placement["coprocessors"]]
-    remote = [n["name"] for n in nodes if any(f in n for f in _REMOTE_FIELDS)]
-    if remote:
-        # ponytail: local placements only; remote nodes map executor/endpoint onto
-        # executor_options/endpoint in a later phase.
-        raise NotImplementedError(f"remote placement for {remote} is not supported in phase 1")
+    if any("endpoint" in n for n in nodes):
+        raise NotImplementedError("RDMA endpoints in a placement are not supported yet")
+    addresses = {n.get("executor", {}).get("address") for n in nodes}
+    if len(addresses) != 1 or None in addresses:
+        raise ValueError(f"placement must put every node on one executor, got {addresses}")
+    shared = {"remote": True, "executor": Executor(addresses.pop()).launch()}
 
     c = placement["controller"]
-    ctrl = qp.Controller(
-        name=c["name"], device=qp.device(c["device"]["name"], wires=c["device"]["wires"]))
+    ctrl = qp.Controller(name=c["name"], hardware=c["hardware"],
+                         device=qp.device(c["device"]["name"], wires=c["device"]["wires"]),
+                         **shared)
     coprocs = [
-        qp.Coprocessor(
-            name=p["name"],
-            coprocessor_fn=qp.CoprocessorFunction(
-                p["function"]["symbol"], lib_path=p["function"]["lib_path"]))
+        qp.Coprocessor(name=p["name"], hardware=p["hardware"],
+                       coprocessor_fn=qp.CoprocessorFunction(
+                           p["function"]["symbol"], lib_path=p["function"]["lib_path"]),
+                       **shared)
         for p in placement["coprocessors"]
     ]
     return qp.Backline(controller=ctrl, coprocessors=coprocs,
